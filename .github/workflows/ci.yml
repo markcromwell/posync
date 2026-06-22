@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.lock
+      - run: python -m pytest scripts/ -q   # whole scripts/ dir — feature + auth-enforcement tests must run in CI
+      - run: python -m scripts.smoke_boot
+
+  # Standard SOV Program boot gate (Option A): build the REAL image and prove it serves /health, where
+  # the program's own deps live. A non-booting image fails here and is blocked at merge (required check).
+  boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t boot-test:ci .
+      - name: Migrations idempotency (apply twice)
+        run: |
+          if [ ! -d alembic ]; then echo "no alembic — skipping"; exit 0; fi
+          docker run --rm -e DATABASE_URL=sqlite:////tmp/ci.db --entrypoint sh boot-test:ci \
+            -c "alembic upgrade head && alembic upgrade head && alembic current"
+      - name: Boot + /health
+        run: |
+          docker run -d --name boot -e DATABASE_URL=sqlite:////tmp/ci.db -p 8000:8000 boot-test:ci
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health | grep -q '"status":"ok"'; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs boot || true
+          docker rm -f boot || true
+          if [ "$ok" != "1" ]; then echo "BOOT/HEALTH FAILED"; exit 1; fi
+          echo "boot gate: /health OK"
