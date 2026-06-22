@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./app.db"  # override via env for Postgres
     sov_url: str = "http://localhost:8765"
     sov_api_key: str = ""
+    digest_api_key: str = ""
 
 
 settings = Settings()
